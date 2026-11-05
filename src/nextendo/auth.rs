@@ -1,10 +1,11 @@
-use anyhow::{Result, anyhow};
+use anyhow::{Ok, Result, anyhow};
 use axum::routing::get;
 use axum::{
     Router,
     extract::{Query, State},
 };
 
+use oauth2::RefreshToken;
 use oauth2::basic::BasicTokenResponse;
 use oauth2::{
     AuthUrl, AuthorizationCode, ClientId, CsrfToken, PkceCodeChallenge, PkceCodeVerifier,
@@ -141,4 +142,29 @@ pub async fn login(config: &OAuthConfig) -> Result<BasicTokenResponse> {
     let token = exchange_code(config, code, pending.verifier).await?;
 
     Ok(token)
+}
+
+pub async fn refresh(config: &OAuthConfig, refresh_token: &str) -> Result<BasicTokenResponse> {
+    let client = BasicClient::new(ClientId::new(config.client_id.clone()))
+        .set_token_uri(TokenUrl::new(config.token_url.clone())?);
+    let http_client = reqwest::ClientBuilder::new()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()?;
+
+    let response = client
+        .exchange_refresh_token(&RefreshToken::new(refresh_token.to_owned()))
+        .request_async(&http_client)
+        .await?;
+
+    Ok(response)
+}
+
+pub fn config() -> OAuthConfig {
+    OAuthConfig {
+        client_id: "nxc_VFatPpklaSUn".into(),
+        authorization_url: "https://nextendo.network/oauth/authorize".into(),
+        token_url: "https://nextendo.network/api/oauth/token".into(),
+        redirect_uri: "http://127.0.0.1:47823/callback".into(),
+        scopes: vec!["identity".into(), "presence".into(), "friends".into()],
+    }
 }
