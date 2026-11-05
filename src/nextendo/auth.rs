@@ -1,8 +1,8 @@
 use anyhow::{Ok, Result, anyhow};
-use axum::routing::get;
 use axum::{
     Router,
     extract::{Query, State},
+    routing::get,
 };
 
 use oauth2::RefreshToken;
@@ -86,10 +86,10 @@ struct CallbackParams {
 async fn callback(
     State(tx): State<mpsc::Sender<CallbackParams>>,
     Query(params): Query<CallbackParams>,
-) -> &'static str {
+) -> axum::response::Redirect {
     let _ = tx.send(params).await;
 
-    "Authentication received. You can close this window."
+    axum::response::Redirect::to("https://nextendo.network/connected")
 }
 
 pub async fn exchange_code(

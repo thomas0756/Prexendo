@@ -1,10 +1,10 @@
 use anyhow::{Result, anyhow};
 use keyring::Entry;
-use oauth2::{StandardRevocableToken::AccessToken, TokenResponse, basic::BasicTokenResponse};
+use oauth2::{TokenResponse, basic::BasicTokenResponse};
 use serde::{Deserialize, Serialize};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime};
 
-use crate::nextendo::auth::{self, OAuthConfig};
+use crate::nextendo::auth::{config, login, refresh};
 
 #[derive(Debug, Serialize, Deserialize)]
 struct StoredTokens {
@@ -21,6 +21,7 @@ fn save_tokens(tokens: &StoredTokens) -> Result<()> {
 
     Ok(())
 }
+
 fn load_tokens() -> Result<StoredTokens> {
     let entry = Entry::new("prexendo", "nextendo")?;
     let json = entry.get_password()?;
@@ -28,16 +29,31 @@ fn load_tokens() -> Result<StoredTokens> {
     Ok(serde_json::from_str(&json)?)
 }
 
-fn store_response(response: BasicTokenResponse) -> Result<StoredTokens> {
-    todo!()
+fn tokens_from_response(response: BasicTokenResponse) -> Result<StoredTokens> {
+    let refresh_token = response
+        .refresh_token()
+        .ok_or_else(|| anyhow!("Nextendo did not provide a refresh token"))?
+        .secret()
+        .clone();
+
+    let expires_in = response
+        .expires_in()
+        .ok_or_else(|| anyhow!("OAuth response did not include token expiry"))?;
+
+    Ok(StoredTokens {
+        access_token: response.access_token().secret().clone(),
+        refresh_token,
+        expires_at: SystemTime::now() + expires_in,
+    })
 }
 
-async fn refresh_tokens(tokens: &StoredTokens) -> Result<StoredTokens> {
-    todo!()
+async fn refresh_stored_tokens(tokens: &StoredTokens) -> Result<StoredTokens> {
+    let response = refresh(&config(), &tokens.refresh_token).await?;
+    tokens_from_response(response)
 }
 
 pub async fn get_access_token() -> Result<String> {
-    let tokens = match load_tokens() {
+    let mut tokens = match load_tokens() {
         Ok(tokens) => tokens,
 
         Err(err)
@@ -46,28 +62,10 @@ pub async fn get_access_token() -> Result<String> {
                 Some(keyring::Error::NoEntry)
             ) =>
         {
-            let config = auth::config();
+            let response = login(&config()).await?;
 
-            let response = auth::login(&config).await?;
-
-            let refresh_token = response
-                .refresh_token()
-                .ok_or_else(|| anyhow!("Nextendo did not provide a refresh token"))?
-                .secret()
-                .clone();
-
-            let expires_in = response
-                .expires_in()
-                .ok_or_else(|| anyhow!("OAuth response did not include token expiry"))?;
-
-            let tokens = StoredTokens {
-                access_token: response.access_token().secret().clone(),
-                refresh_token: refresh_token,
-                expires_at: SystemTime::now() + expires_in,
-            };
-
+            let tokens = tokens_from_response(response)?;
             save_tokens(&tokens)?;
-
             tokens
         }
 
@@ -75,32 +73,18 @@ pub async fn get_access_token() -> Result<String> {
     };
 
     if SystemTime::now() + Duration::from_secs(60) >= tokens.expires_at {
-        let response = auth::refresh(&auth::config(), &tokens.refresh_token).await?;
-
-        let expires_in = response
-            .expires_in()
-            .ok_or_else(|| anyhow!("OAuth response did not include token expiry"))?;
-
-        let tokens = StoredTokens {
-            access_token: response.access_token().secret().clone(),
-            refresh_token: response
-                .refresh_token()
-                .map(|token| token.secret().clone())
-                .unwrap_or_else(|| tokens.refresh_token.clone()),
-            expires_at: SystemTime::now() + expires_in,
-        };
-
-        save_tokens(&tokens)?;
-        return Ok(tokens.access_token);
+        match refresh_stored_tokens(&tokens).await {
+            Ok(new_tokens) => {
+                tokens = new_tokens;
+                save_tokens(&tokens)?;
+            }
+            Err(_) => {
+                let response = login(&config()).await?;
+                tokens = tokens_from_response(response)?;
+                save_tokens(&tokens)?;
+            }
+        }
     }
 
     Ok(tokens.access_token)
 }
-
-// TODO List for LLM
-// - Re-authenticate if the refresh token is expired
-// - Automatically refresh the tokens while the tool is open in the background
-// - Don't make a new page that just says "You can close this tab" since Nextendo's own ownauth success page is perfectly good
-
-// Notes for LLM
-// - Nextendo's own servers refresh every 15 seconds, so that's the cycle everything runs at

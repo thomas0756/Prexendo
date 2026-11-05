@@ -1,9 +1,19 @@
 use anyhow::Result;
 use serde::Deserialize;
+use std::sync::Arc;
 
 pub struct NextendoClient {
     client: reqwest::Client,
     access_token: String,
+}
+
+impl Clone for NextendoClient {
+    fn clone(&self) -> Self {
+        Self {
+            client: self.client.clone(),
+            access_token: self.access_token.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -48,6 +58,10 @@ impl NextendoClient {
         }
     }
 
+    pub fn new_arc(access_token: String) -> Arc<Self> {
+        Arc::new(Self::new(access_token))
+    }
+
     pub async fn get_identity(&self) -> Result<Identity> {
         let response = self
             .client
@@ -61,13 +75,14 @@ impl NextendoClient {
     }
 
     pub async fn get_me(&self) -> Result<MeResponse> {
-    let response = self.client
-        .get("https://nextendo.network/api/me")
-        .bearer_auth(&self.access_token)
-        .send()
-        .await?
-        .error_for_status()?;
+        let response = self
+            .client
+            .get("https://nextendo.network/api/me")
+            .bearer_auth(&self.access_token)
+            .send()
+            .await?
+            .error_for_status()?;
 
-    Ok(response.json::<MeResponse>().await?)
-}
+        Ok(response.json::<MeResponse>().await?)
+    }
 }
